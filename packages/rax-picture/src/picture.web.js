@@ -1,7 +1,13 @@
 import {createElement, Component, PropTypes} from 'rax';
 import View from 'rax-view';
 import Image from 'rax-image';
+import optimizer from './optimizer/index';
 import webp from './webp';
+
+const toString = {}.toString;
+const isArray = Array.isArray || function(arr) {
+  return toString.call(arr) == '[object Array]';
+};
 
 let isSupportJPG = false;
 let isSupportPNG = false;
@@ -13,6 +19,41 @@ webp.isSupport((_isSupportJPG) => {
 webp.isSupport((_isSupportPNG) => {
   isSupportPNG = _isSupportPNG;
 }, 'alpha');
+
+/**
+ * @param  {String|Array} suffix
+ * @return {[type]}        [description]
+ */
+function parseSuffix(suffix) {
+  const result = [];
+  let ret = [];
+
+  if (typeof suffix === 'string') {
+    ret = suffix.split(',');
+  }
+
+  if (isArray(suffix)) {
+    ret = suffix;
+  }
+
+  if (ret && ret[0]) {
+    result[0] = ret[0];
+  }
+  if (ret && ret[1]) {
+    result[1] = ret[1];
+  }
+
+  return result;
+}
+
+/**
+ * @param  {String|Array} suffix
+ * @return {[type]}
+ */
+function getQualitySuffix(highQuality, suffix) {
+  const _suffix = parseSuffix(suffix);
+  return highQuality ? _suffix[0] : _suffix[1];
+}
 
 class Picture extends Component {
   static defaultProps = {
@@ -110,6 +151,7 @@ class Picture extends Component {
         ignoreGif
         } = this.props,
       { uri } = source;
+    let nativeProps = this.props;
 
     if (!this.uri) {
       let sWidth = style.width, // style width of picture
@@ -127,6 +169,24 @@ class Picture extends Component {
 
       this.uri = uri;
 
+      if (uri) {
+        if (autoPixelRatio && window.devicePixelRatio > 1) { // devicePixelRatio >= 2 for web
+          if (typeof sWidth === 'string' && sWidth.indexOf('rem') > -1) {
+            sWidth = parseInt(sWidth.split('rem')[0]) * 2 + 'rem';
+          }
+        }
+
+        this.uri = optimizer(uri, {
+          ignoreGif: ignoreGif,
+          ignorePng: true,
+          removeScheme: autoRemoveScheme,
+          replaceDomain: autoReplaceDomain,
+          scalingWidth: autoScaling ? sWidth : 0,
+          webp: autoWebp && (isSupportJPG && isSupportPNG),
+          compressSuffix: autoCompress ? getQualitySuffix(highQuality, compressSuffix) : ''
+        });
+      }
+
       if (resizeMode) {
         this.newStyle.resizeMode = resizeMode;
       }
@@ -135,7 +195,7 @@ class Picture extends Component {
     let url = placeholder;
     if (lazyload) {
       const { visible } = this.state;
-
+      nativeProps.onAppear = () => this.lazyLoad();
       if (visible) {
         url = this.uri;
       }
@@ -146,9 +206,8 @@ class Picture extends Component {
     if (children || resizeMode) {
       return (
         <View
-          {...this.props}
+          {...nativeProps}
           data-once={true}
-          onAppear={() => this.lazyLoad()}
           style={[
             this.newStyle, {
               backgroundImage: 'url(' + url + ')',
@@ -165,9 +224,8 @@ class Picture extends Component {
       );
     } else {
       return <Image
-        {...this.props}
+        {...nativeProps}
         data-once={true}
-        onAppear={() => this.lazyLoad()}
         source={{
           uri: url
         }}

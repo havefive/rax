@@ -5,11 +5,11 @@ import NativeComponent from './vdom/native';
 import TextComponent from './vdom/text';
 import CompositeComponent from './vdom/composite';
 import FragmentComponent from './vdom/fragment';
-import WeexDriver from './drivers/weex';
-import BrowserDriver from './drivers/browser';
+import WeexDriver from 'driver-weex';
+import BrowserDriver from 'driver-browser';
 import Hook from './debug/hook';
 
-export default function inject({driver, hook, measurer}) {
+export default function inject({driver, hook, measurer, deviceWidth, viewportWidth}) {
   // Inject component class
   Host.EmptyComponent = EmptyComponent;
   Host.NativeComponent = NativeComponent;
@@ -33,7 +33,14 @@ export default function inject({driver, hook, measurer}) {
         throw Error('No builtin driver matched');
       }
     }
-
     Host.driver = driver;
+  }
+
+  if (deviceWidth && driver.setDeviceWidth) {
+    driver.setDeviceWidth(deviceWidth);
+  }
+
+  if (viewportWidth && driver.setViewportWidth) {
+    driver.setViewportWidth(viewportWidth);
   }
 }
