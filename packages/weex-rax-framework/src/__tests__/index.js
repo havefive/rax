@@ -2,15 +2,15 @@
 
 require('weex-runtime-js').freezePrototype();
 
-import {Runtime, Instance} from 'weex-vdom-tester';
-import {config, init} from 'weex-runtime-js';
+import { Runtime, Instance } from 'weex-vdom-tester';
+import { config, init } from 'weex-runtime-js';
 import * as framework from '../index';
 
 init();
 
-const {Document, Element, Comment} = config;
+const { Document, Element, Comment } = config;
 
-global.callNative = () => {};
+global.callNative = () => { };
 global.WXEnvironment = {
   'scale': 2,
   'appVersion': '1.8.3',
@@ -35,8 +35,8 @@ describe('framework', () => {
   };
   let __weex_callbacks__;
   let __weex_data__;
-  let sendTasksHandler = () => {};
-  let sendTasks = function() {
+  let sendTasksHandler = () => { };
+  let sendTasks = function () {
     return sendTasksHandler.apply(null, arguments);
   };
 
@@ -53,7 +53,9 @@ describe('framework', () => {
       audio: ['addEventListener', 'removeAllEventListeners', 'canPlayType', 'stop', 'pause', 'load', 'play', 'setVolume'],
       picker: ['addEventListener', 'removeAllEventListeners', 'pickTime', 'pickDate', 'pick'],
     });
-    sendTasksHandler = function() {
+
+    framework.registerComponents(['div', 'video']);
+    sendTasksHandler = function () {
       runtime.target.callNative(...arguments);
       // FIXME: Hack for should return value like setTimeout
       return '1';
@@ -102,7 +104,7 @@ describe('framework', () => {
 
     expect(instance.getRealRoot()).toEqual({
       type: 'div',
-      children: [{ type: 'text', attr: { value: 'Hello' }}]
+      children: [{ type: 'text', attr: { value: 'Hello' } }]
     });
   });
 
@@ -197,7 +199,7 @@ describe('framework', () => {
       a = 'throws ReferenceError';
     `;
 
-    expect(function() {
+    expect(function () {
       instance.$create(code, __weex_callbacks__, __weex_options__, __weex_data__);
     }).toThrowError(/a is not defined/);
   });
@@ -210,7 +212,7 @@ describe('framework', () => {
       // Could use Foo.prototype = {toString(){}}
     `;
 
-    expect(function() {
+    expect(function () {
       instance.$create(code, __weex_callbacks__, __weex_options__, __weex_data__);
     }).toThrowError(/Cannot assign to read only property/);
   });
@@ -221,9 +223,9 @@ describe('framework', () => {
       Object.assgin = function(){}
     `;
 
-    expect(function() {
+    expect(function () {
       instance.$create(code, __weex_callbacks__, __weex_options__, __weex_data__);
-    }).toThrowError(/Can't add property assgin, object is not extensible/);
+    }).toThrowError(/object is not extensible/);
   });
 
   it('run in Object freeze mode', () => {
@@ -233,7 +235,7 @@ describe('framework', () => {
       foo.toString = function(){};
     `;
 
-    expect(function() {
+    expect(function () {
       instance.$create(code, __weex_callbacks__, __weex_options__, __weex_data__);
     }).toThrowError(/Cannot assign to read only property/);
   });
@@ -467,7 +469,7 @@ describe('framework', () => {
 
     const mockFn = jest.fn((args) => {
       expect(args).toEqual({
-        message: JSON.stringify({foo: 'foo'})
+        message: JSON.stringify({ foo: 'foo' })
       });
     });
 
@@ -874,6 +876,29 @@ describe('framework', () => {
     });
 
     instance.oncall('instanceWrap', 'error', mockFn);
+
+    instance.$create(code, __weex_callbacks__, __weex_options__, __weex_data__);
+
+    expect(mockFn).toHaveBeenCalled();
+  });
+
+  it('weex supports', () => {
+    const code = `
+      var moduleExisted = __weex_module_supports__('webSocket.send');
+      var moduleNotexisted = __weex_module_supports__('webSocket.send2');
+
+      var tagExisted = __weex_tag_supports__('div');
+      var tagNotexisted = __weex_tag_supports__('divx');
+      alert([moduleExisted, moduleNotexisted, tagExisted, tagNotexisted]);
+    `;
+
+    const mockFn = jest.fn((args) => {
+      expect(args).toEqual({
+        message: [true, false, true, false]
+      });
+    });
+
+    instance.oncall('modal', 'alert', mockFn);
 
     instance.$create(code, __weex_callbacks__, __weex_options__, __weex_data__);
 
