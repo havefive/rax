@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const spawnSync = require('child_process').spawnSync;
 
-const babel = require('babel-core');
+const babel = require('@babel/core');
 const chalk = require('chalk');
 const glob = require('glob');
 const minimatch = require('minimatch');
@@ -22,20 +22,13 @@ const parseArgs = require('minimist');
 const chokidar = require('chokidar');
 
 const SRC_DIR = 'src';
-const BUILD_DIR = 'lib';
 const JS_FILES_PATTERN = '**/*.js';
-const IGNORE_PATTERN = '**/__tests__/**';
-const PACKAGES_DIR = path.resolve(__dirname, '../packages');
+const IGNORE_PATTERN = '**/{__tests__,__mocks__}/**';
 
 const args = parseArgs(process.argv);
 const customPackages = args.packages;
 
-const babelOptions = JSON.parse(fs.readFileSync(
-  path.resolve(__dirname, '..', '.babelrc'),
-  'utf8'
-));
-babelOptions.babelrc = false;
-// babelOptions.sourceMaps = 'inline';
+const getBabelConfig = require('./config/getBabelConfig');
 
 const fixedWidth = str => {
   const WIDTH = 80;
@@ -47,7 +40,7 @@ const fixedWidth = str => {
   return strs.slice(0, -1).concat(lastString).join('\n');
 };
 
-function buildPackage(p) {
+function buildPackage(packagesDir, p, isBuildEs) {
   const srcDir = path.resolve(p, SRC_DIR);
   const pattern = path.resolve(srcDir, '**/*');
   const files = glob.sync(pattern, {nodir: true});
@@ -56,17 +49,17 @@ function buildPackage(p) {
     fixedWidth(`${path.basename(p)}\n`)
   );
 
-  files.forEach(file => buildFile(file, true));
+  files.forEach(file => buildFile(packagesDir, file, isBuildEs));
   process.stdout.write(`[  ${chalk.green('OK')}  ]\n`);
 }
 
-function getPackages(customPackages) {
-  return fs.readdirSync(PACKAGES_DIR)
-    .map(file => path.resolve(PACKAGES_DIR, file))
+function getPackages(packagesDir, customPackages) {
+  return fs.readdirSync(packagesDir)
+    .map(file => path.resolve(packagesDir, file))
     .filter(f => {
       if (customPackages) {
-        const packageName = path.relative(PACKAGES_DIR, f).split(path.sep)[0];
-        return customPackages.indexOf(packageName) !== -1;
+        const packageName = path.relative(packagesDir, f).split(path.sep)[0];
+        return packageName.indexOf(customPackages) !== -1;
       } else {
         return true;
       }
@@ -74,64 +67,60 @@ function getPackages(customPackages) {
     .filter(f => fs.lstatSync(path.resolve(f)).isDirectory());
 }
 
-function buildFile(file, silent) {
-  const packageName = path.relative(PACKAGES_DIR, file).split(path.sep)[0];
-  const packageSrcPath = path.resolve(PACKAGES_DIR, packageName, SRC_DIR);
-  const packageBuildPath = path.resolve(PACKAGES_DIR, packageName, BUILD_DIR);
+function buildFile(packagesDir, file, isBuildEs) {
+  const BUILD_DIR = isBuildEs ? 'es' : 'lib';
+  const packageName = path.relative(packagesDir, file).split(path.sep)[0];
+  const packageSrcPath = path.resolve(packagesDir, packageName, SRC_DIR);
+  const packageBuildPath = path.resolve(packagesDir, packageName, BUILD_DIR);
   const relativeToSrcPath = path.relative(packageSrcPath, file);
   const destPath = path.resolve(packageBuildPath, relativeToSrcPath);
 
-  spawnSync('mkdir', ['-p', path.dirname(destPath)]);
-  if (minimatch(file, IGNORE_PATTERN)) {
-    silent || process.stdout.write(
-      chalk.dim('  \u2022 ') +
-      path.relative(PACKAGES_DIR, file) +
-      ' (ignore)\n'
-    );
-  } else if (!minimatch(file, JS_FILES_PATTERN)) {
-    fs.createReadStream(file).pipe(fs.createWriteStream(destPath));
-    silent || process.stdout.write(
-      chalk.red('  \u2022 ') +
-      path.relative(PACKAGES_DIR, file) +
-      chalk.red(' \u21D2 ') +
-      path.relative(PACKAGES_DIR, destPath) +
-      ' (copy)' +
-      '\n'
-    );
+  let babelOptions;
+  if (isBuildEs) {
+    babelOptions = getBabelConfig(true);
   } else {
-    const transformed = babel.transformFileSync(file, babelOptions).code;
-    spawnSync('mkdir', ['-p', path.dirname(destPath)]);
-    fs.writeFileSync(destPath, transformed);
-    silent || process.stdout.write(
-      chalk.green('  \u2022 ') +
-      path.relative(PACKAGES_DIR, file) +
-      chalk.green(' \u21D2 ') +
-      path.relative(PACKAGES_DIR, destPath) +
-      '\n'
-    );
+    babelOptions = getBabelConfig();
+  }
+
+  spawnSync('mkdir', ['-p', path.dirname(destPath)]);
+  if (!minimatch(file, IGNORE_PATTERN)) {
+    if (!minimatch(file, JS_FILES_PATTERN)) {
+      fs.createReadStream(file).pipe(fs.createWriteStream(destPath));
+    } else {
+      const transformed = babel.transformFileSync(file, babelOptions).code;
+      spawnSync('mkdir', ['-p', path.dirname(destPath)]);
+      fs.writeFileSync(destPath, transformed);
+    }
   }
 }
 
-if (args.watch) {
-  // watch packages
-  const packages = getPackages(customPackages);
-  const watchPackagesDir = packages.map(dir => path.resolve(dir, 'src'));
+// const packagesDir = path.resolve(__dirname, '../packages');
+module.exports = function compile(packagesName, isBuildEs) {
+  const packagesDir = path.resolve(__dirname, `../${packagesName}`);
+  const packages = getPackages(packagesDir, customPackages);
 
-  console.log(chalk.green('watch packages compile', packages));
+  if (args.watch) {
+    // watch packages
+    const watchPackagesDir = packages.map(dir => path.resolve(dir, SRC_DIR));
 
-  chokidar.watch(watchPackagesDir, {
-    ignored: IGNORE_PATTERN
-  }).on('change', (filePath) => {
-    const packageName = filePath.match(/\/packages\/([^\/]*)/)[1];
-    const packagePath = path.resolve(__dirname, '../packages/', packageName);
-    process.stdout.write(chalk.bold.inverse(`Compiling package ${packageName} \n`));
-    try {
-      buildPackage(packagePath);
-    } catch (e) {}
+    console.log(chalk.green('watch packages compile', packages));
+
+    chokidar.watch(watchPackagesDir, {
+      ignored: IGNORE_PATTERN
+    }).on('change', (filePath) => {
+      const packageName = filePath.match( new RegExp(`\/${packagesName}\/([^\/]*)`))[1];
+      const packagePath = path.resolve(__dirname, `../${packagesName}/`, packageName);
+      process.stdout.write(chalk.bold.inverse(`Compiling package ${packageName} \n`));
+      try {
+        buildPackage(packagesDir, packagePath, isBuildEs);
+      } catch (e) {}
+      process.stdout.write('\n');
+    });
+  } else {
+    process.stdout.write(chalk.bold.inverse('Compiling packages\n'));
+    packages.forEach((v) => {
+      buildPackage(packagesDir, v, isBuildEs);
+    });
     process.stdout.write('\n');
-  });
-} else {
-  process.stdout.write(chalk.bold.inverse('Compiling packages\n'));
-  getPackages(customPackages).forEach(buildPackage);
-  process.stdout.write('\n');
-}
+  }
+};

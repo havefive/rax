@@ -1,55 +1,45 @@
-import {Component, PropTypes} from 'rax';
-import storeShape from '../utils/storeShape';
-import warning from '../utils/warning';
+import { createElement, useMemo, useEffect } from 'rax';
+import { ReactReduxContext } from './Context';
+import Subscription from '../utils/Subscription';
 
-const NODE_ENV = typeof process !== 'undefined' ? process.env.NODE_ENV : 'development';
+function Provider({ store, context, children }) {
+  const contextValue = useMemo(() => {
+    const subscription = new Subscription(store);
+    subscription.onStateChange = subscription.notifyNestedSubs;
+    return {
+      store,
+      subscription
+    };
+  }, [store]);
 
-let didWarnAboutReceivingStore = false;
-function warnAboutReceivingStore() {
-  if (didWarnAboutReceivingStore) {
-    return;
-  }
-  didWarnAboutReceivingStore = true;
+  const previousState = useMemo(() => store.getState(), [store]);
 
-  warning(
-    '<Provider> does not support changing `store` on the fly. '
-  );
-}
+  useEffect(() => {
+    const { subscription } = contextValue;
+    subscription.trySubscribe();
 
-export default class Provider extends Component {
-  getChildContext() {
-    return { store: this.store };
-  }
-
-  constructor(props, context) {
-    super(props, context);
-    this.store = props.store;
-  }
-
-  render() {
-    return this.props.children;
-  }
-}
-
-if (NODE_ENV !== 'production') {
-  Provider.prototype.componentWillReceiveProps = function(nextProps) {
-    const { store } = this;
-    const { store: nextStore } = nextProps;
-
-    if (store !== nextStore) {
-      warnAboutReceivingStore();
+    if (previousState !== store.getState()) {
+      subscription.notifyNestedSubs();
     }
-  };
+    return () => {
+      subscription.tryUnsubscribe();
+      subscription.onStateChange = null;
+    };
+  }, [contextValue, previousState]);
+
+  const Context = context || ReactReduxContext;
+
+  return <Context.Provider value={contextValue}>{children}</Context.Provider>;
 }
 
+// Provider.propTypes = {
+//   store: PropTypes.shape({
+//     subscribe: PropTypes.func.isRequired,
+//     dispatch: PropTypes.func.isRequired,
+//     getState: PropTypes.func.isRequired
+//   }),
+//   context: PropTypes.object,
+//   children: PropTypes.any
+// }
 
-Provider.propTypes = {
-  store: storeShape,
-  children: PropTypes.element.isRequired
-};
-
-Provider.childContextTypes = {
-  store: storeShape
-};
-
-Provider.displayName = 'Provider';
+export default Provider;

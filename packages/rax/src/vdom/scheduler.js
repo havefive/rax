@@ -1,21 +1,50 @@
-const synchronousScheduler = job => job();
+let updateCallbacks = [];
+let effectCallbacks = [];
+let layoutCallbacks = [];
+export let scheduler = setTimeout;
 
-const requestAnimationFramePolyfill = job => setTimeout(job, 16);
-const animationScheduler = typeof requestAnimationFrame === 'undefined' ?
-  typeof webkitRequestAnimationFrame === 'undefined' ?
-    requestAnimationFramePolyfill :
-    webkitRequestAnimationFrame : requestAnimationFrame;
+if (process.env.NODE_ENV !== 'production') {
+  // Wrapper timer for hijack timers in jest
+  scheduler = (callback) => {
+    setTimeout(callback);
+  };
+}
 
-const requestIdleCallbackPolyfill = job => setTimeout(job, 1024); // 1s
-const backgroundScheduler = typeof requestIdleCallback === 'undefined' ?
-  requestIdleCallbackPolyfill : requestIdleCallback;
+function invokeFunctionsWithClear(callbacks) {
+  let callback;
+  while (callback = callbacks.shift()) {
+    callback();
+  }
+}
 
-let currentScheduler = synchronousScheduler;
+// Schedule before next render
+export function schedule(callback) {
+  if (updateCallbacks.length === 0) {
+    scheduler(flush);
+  }
+  updateCallbacks.push(callback);
+}
 
-export default {
-  getScheduler: () => currentScheduler,
-  setScheduler: scheduler => currentScheduler = scheduler,
-  synchronousScheduler,
-  animationScheduler,
-  backgroundScheduler,
-};
+// Flush before next render
+export function flush() {
+  invokeFunctionsWithClear(updateCallbacks);
+}
+
+export function scheduleEffect(callback) {
+  if (effectCallbacks.length === 0) {
+    scheduler(flushEffect);
+  }
+  effectCallbacks.push(callback);
+}
+
+export function flushEffect() {
+  invokeFunctionsWithClear(effectCallbacks);
+}
+
+export function scheduleLayout(callback) {
+  layoutCallbacks.push(callback);
+}
+
+export function flushLayout() {
+  invokeFunctionsWithClear(layoutCallbacks);
+}

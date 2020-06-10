@@ -1,9 +1,10 @@
 node_modules
-website
-gh-pages
 lib
+es
 dist
 build
 coverage
-weex
 expected
+website
+gh-pages
+vendors

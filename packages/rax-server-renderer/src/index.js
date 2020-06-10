@@ -1,35 +1,8 @@
+import { shared } from 'rax';
+import { BOOLEAN, BOOLEANISH_STRING, OVERLOADED_BOOLEAN, shouldRemoveAttribute, getPropertyInfo } from './attribute';
+import { UNITLESS_NUMBER_PROPS } from './CSSProperty';
+
 const EMPTY_OBJECT = {};
-const UNITLESS_NUMBER_PROPS = {
-  animationIterationCount: true,
-  borderImageOutset: true,
-  borderImageSlice: true,
-  borderImageWidth: true,
-  boxFlex: true,
-  boxFlexGroup: true,
-  boxOrdinalGroup: true,
-  columnCount: true,
-  flex: true,
-  flexGrow: true,
-  flexPositive: true,
-  flexShrink: true,
-  flexNegative: true,
-  flexOrder: true,
-  gridRow: true,
-  gridColumn: true,
-  fontWeight: true,
-  lineClamp: true,
-  // We make lineHeight default is px that is diff with w3c spec
-  // lineHeight: true,
-  opacity: true,
-  order: true,
-  orphans: true,
-  tabSize: true,
-  widows: true,
-  zIndex: true,
-  zoom: true,
-  // Weex only
-  lines: true,
-};
 
 const VOID_ELEMENTS = {
   'area': true,
@@ -82,27 +55,147 @@ function merge(target) {
   return target;
 }
 
+const DEFAULT_STYLE_OPTIONS = {
+  defaultUnit: 'px',
+  viewportWidth: 750,
+  unitPrecision: 5
+};
 const UPPERCASE_REGEXP = /[A-Z]/g;
 const NUMBER_REGEXP = /^[0-9]*$/;
 const CSSPropCache = {};
 
-function styleToCSS(style) {
+function styleToCSS(style, options = {}) {
   let css = '';
+
+  if (Array.isArray(style)) {
+    style = style.reduce((prev, curr) => Object.assign(prev, curr), {});
+  }
+
   // Use var avoid v8 warns "Unsupported phi use of const or let variable"
   for (var prop in style) {
     let val = style[prop];
     let unit = '';
 
-    if (UNITLESS_NUMBER_PROPS[prop]) {
-      // Noop
-    } else if (typeof val === 'number' || typeof val === 'string' && NUMBER_REGEXP.test(val)) {
-      unit = 'rem';
+    if (val == null) {
+      continue;
+    }
+
+    const type = typeof val;
+
+    // Handle unit for all numerical property, such as fontWeight: 600 / fontWeight: '600'
+    if (type === 'number' || type === 'string' && NUMBER_REGEXP.test(val)) {
+      if (!UNITLESS_NUMBER_PROPS[prop]) {
+        unit = options.defaultUnit;
+      }
+    }
+
+    if (type === 'string' && val.indexOf('rpx') > -1 || unit === 'rpx') {
+      val = rpx2vw(val, options);
+      unit = val === 0 ? '' : 'vw';
     }
 
     prop = CSSPropCache[prop] ? CSSPropCache[prop] : CSSPropCache[prop] = prop.replace(UPPERCASE_REGEXP, '-$&').toLowerCase();
     css = css + `${prop}:${val}${unit};`;
   }
+
   return css;
+}
+
+function createMarkupForProperty(prop, value, options) {
+  if (prop === 'children') {
+    // Ignore children prop
+    return '';
+  }
+
+  if (prop === 'style') {
+    return ` style="${styleToCSS(value, options)}"`;
+  }
+
+  if (prop === 'className') {
+    return typeof value === 'string' ? ` class="${escapeText(value)}"` : '';
+  }
+
+  if (prop === 'dangerouslySetInnerHTML') {
+    // Ignore innerHTML
+    return '';
+  }
+
+  if (shouldRemoveAttribute(prop, value)) {
+    return '';
+  }
+
+  const propInfo = getPropertyInfo(prop);
+  const propType = propInfo ? propInfo.type : null;
+  const valueType = typeof value;
+
+  if (propType === BOOLEAN || propType === OVERLOADED_BOOLEAN && value === true) {
+    return ` ${prop}`;
+  }
+
+  if (valueType === 'string') {
+    return ` ${prop}="${escapeText(value)}"`;
+  }
+
+  if (valueType === 'number') {
+    return ` ${prop}="${String(value)}"`;
+  }
+
+  if (valueType === 'boolean') {
+    if (propType === BOOLEANISH_STRING || prop.indexOf('data-') === 0 || prop.indexOf('aria-') === 0) {
+      return ` ${prop}="${value ? 'true' : 'false'}"`;
+    }
+  }
+
+  return '';
+};
+
+function propsToString(props, options) {
+  let html = '';
+  for (var prop in props) {
+    var value = props[prop];
+
+    if (prop === 'defaultValue') {
+      if (props.value == null) {
+        prop = 'value';
+      } else {
+        continue;
+      }
+    }
+
+    if (prop === 'defaultChecked') {
+      if (!props.checked) {
+        prop = 'checked';
+      } else {
+        continue;
+      }
+    }
+
+    html = html + createMarkupForProperty(prop, value, options);
+  }
+
+  return html;
+}
+
+function rpx2vw(val, opts) {
+  const pixels = parseFloat(val);
+  const vw = pixels / opts.viewportWidth * 100;
+  const parsedVal = parseFloat(vw.toFixed(opts.unitPrecision));
+
+  return parsedVal;
+}
+
+function checkContext(element) {
+  // Filter context by `contextTypes` or prevent pass context to child without `contextTypes`,
+  // need to distinguish context for passing to child and render, which will cause `Consumer` can not work correctly.
+  // The best way to get context is from the nearest parent provider, but it will increase the complexity of SSR.
+  if (element.contextTypes || element.childContextTypes) {
+    console.error(
+      'Warning: ' +
+      'The legacy "contextTypes" and "childContextTypes" API not working properly in server renderer, ' +
+      'use the new context API. ' +
+      `(Current: ${shared.Host.owner.__getName()})`
+    );
+  }
 }
 
 const updater = {
@@ -120,114 +213,189 @@ const updater = {
   }
 };
 
-function renderElementToString(element, context) {
+/**
+ * Functional Reactive Component Class Wrapper
+ */
+class ServerReactiveComponent {
+  constructor(pureRender, ref) {
+    // A pure function
+    this._render = pureRender;
+    this._hookID = 0;
+    this._hooks = {};
+    // Handles store
+    this.didMount = [];
+    this.didUpdate = [];
+    this.willUnmount = [];
+
+    if (pureRender._forwardRef) {
+      this._forwardRef = ref;
+    }
+  }
+
+  getHooks() {
+    return this._hooks;
+  }
+
+  getHookID() {
+    return ++this._hookID;
+  }
+
+  useContext(context) {
+    const contextID = context._contextID;
+
+    if (this.context[contextID]) {
+      return this.context[contextID].getValue();
+    } else {
+      return context._defaultValue;
+    }
+  }
+
+  render() {
+    this._hookID = 0;
+    let children = this._render(this.props, this._forwardRef ? this._forwardRef : this.context);
+    return children;
+  }
+}
+
+function createInstance(element, context) {
+  const { type } = element;
+  const props = element.props || EMPTY_OBJECT;
+
+  let instance;
+
+  // class component
+  if (type.prototype && type.prototype.render) {
+    instance = new type(props, context); // eslint-disable-line new-cap
+    instance.props = props;
+    instance.context = context;
+    // Inject the updater into instance
+    instance.updater = updater;
+
+    if (instance.componentWillMount) {
+      instance.componentWillMount();
+
+      if (instance._pendingState) {
+        const state = instance.state;
+        const pending = instance._pendingState;
+
+        if (state == null) {
+          instance.state = pending;
+        } else {
+          for (var key in pending) {
+            state[key] = pending[key];
+          }
+        }
+        instance._pendingState = null;
+      }
+    }
+  } else {
+    const ref = element.ref;
+    instance = new ServerReactiveComponent(type, ref);
+    instance.props = props;
+    instance.context = context;
+  }
+
+  return instance;
+}
+
+function renderElementToString(element, context, options) {
   if (typeof element === 'string') {
     return escapeText(element);
   } else if (element == null || element === false || element === true) {
-    return '<!-- empty -->';
+    return '<!-- _ -->';
   } else if (typeof element === 'number') {
     return String(element);
   } else if (Array.isArray(element)) {
     let html = '';
     for (var index = 0, length = element.length; index < length; index++) {
       var child = element[index];
-      html = html + renderElementToString(child, context);
+      html = html + renderElementToString(child, context, options);
     }
     return html;
+  }
+
+  // pre compiled html
+  if (element.__html != null) { // __html may be empty string
+    return element.__html;
+  }
+
+  // pre compiled attrs
+  if (element.__attrs) {
+    return propsToString(element.__attrs, options);
   }
 
   const type = element.type;
 
   if (type) {
-    const props = element.props || EMPTY_OBJECT;
+    // class component || function component
+    if (type.prototype && type.prototype.render || typeof type === 'function') {
+      const instance = createInstance(element, context);
 
-    if (type.prototype && type.prototype.render) {
-      const instance = new type(props, context, updater); // eslint-disable-line new-cap
+      const currentComponent = {
+        // For hooks to get current instance
+        _instance: instance
+      };
 
+      if (process.env.NODE_ENV !== 'production') {
+        const componetName = type.displayName || type.name || element;
+        // Give the component name in render error info (only for development)
+        currentComponent.__getName = () => componetName;
+      }
+
+      // Rax will use owner during rendering, eg: hooks, render error info.
+      shared.Host.owner = currentComponent;
+
+      if (process.env.NODE_ENV !== 'production') {
+        checkContext(type);
+      }
+
+      let currentContext = instance.context;
       let childContext;
+
       if (instance.getChildContext) {
         childContext = instance.getChildContext();
+      } else if (instance._getChildContext) {
+        // Only defined in Provider
+        childContext = instance._getChildContext();
       }
 
       if (childContext) {
         // Why not use Object.assign? for better performance
-        context = merge({}, context, childContext);
-      }
-      instance.context = context;
-
-      if (instance.componentWillMount) {
-        instance.componentWillMount();
-
-        if (instance._pendingState) {
-          const state = instance.state;
-          const pending = instance._pendingState;
-
-          if (state == null) {
-            instance.state = pending;
-          } else {
-            for (var key in pending) {
-              state[key] = pending[key];
-            }
-          }
-          instance._pendingState = null;
-        }
+        currentContext = merge({}, context, childContext);
       }
 
-      var renderedElement = instance.render();
-      return renderElementToString(renderedElement, context);
-    } else if (typeof type === 'function') {
-      var renderedElement = type(props, context);
-      return renderElementToString(renderedElement, context);
+      const renderedElement = instance.render();
+
+      // Reset owner after render, or it will casue memory leak.
+      shared.Host.owner = null;
+
+      return renderElementToString(renderedElement, currentContext, options);
     } else if (typeof type === 'string') {
+      const props = element.props || EMPTY_OBJECT;
       const isVoidElement = VOID_ELEMENTS[type];
-      let html = `<${type}`;
+      let html = `<${type}${propsToString(props, options)}`;
       let innerHTML;
 
-      for (var prop in props) {
-        var value = props[prop];
-
-        if (prop === 'children') {
-          // Ignore children prop
-        } else if (prop === 'style') {
-          html = html + ` style="${styleToCSS(value)}"`;
-        } else if (prop === 'className') {
-          html = html + ` class="${escapeText(value)}"`;
-        } else if (prop === 'defaultValue') {
-          if (!props.value) {
-            html = html + ` value="${typeof value === 'string' ? escapeText(value) : value}"`;
-          }
-        } else if (prop === 'defaultChecked') {
-          if (!props.checked) {
-            html = html + ` checked="${value}"`;
-          }
-        } else if (prop === 'dangerouslySetInnerHTML') {
-          innerHTML = value.__html;
-        } else {
-          if (typeof value === 'string') {
-            html = html + ` ${prop}="${escapeText(value)}"`;
-          } else if (typeof value === 'number') {
-            html = html + ` ${prop}="${String(value)}"`;
-          } else if (typeof value === 'boolean') {
-            html = html + ` ${prop}`;
-          }
-        }
+      if (props.dangerouslySetInnerHTML) {
+        innerHTML = props.dangerouslySetInnerHTML.__html;
       }
 
       if (isVoidElement) {
         html = html + '>';
       } else {
         html = html + '>';
-        var children = props.children;
-        if (children) {
+        // When child is null or undefined, it should be render as <!-- _ -->
+        if (props.hasOwnProperty('children')) {
+          const children = props.children;
           if (Array.isArray(children)) {
             for (var i = 0, l = children.length; i < l; i++) {
               var child = children[i];
-              html = html + renderElementToString(child, context);
+              html = html + renderElementToString(child, context, options);
             }
           } else {
-            html = html + renderElementToString(children, context);
+            html = html + renderElementToString(children, context, options);
           }
-        } else if (innerHTML) {
+        } else if (innerHTML != null) { // When dangerouslySetInnerHTML is 0, it should be render as 0
           html = html + innerHTML;
         }
 
@@ -235,12 +403,29 @@ function renderElementToString(element, context) {
       }
 
       return html;
+    } else {
+      throwInValidElementError(element);
     }
   } else {
-    console.error(`renderToString: received an element that is not valid. (keys: ${Object.keys(element)})`);
+    throwInValidElementError(element);
   }
 }
 
-exports.renderToString = function renderToString(element) {
-  return renderElementToString(element, EMPTY_OBJECT);
+function throwInValidElementError(element) {
+  let typeInfo = element === undefined ? '' :
+    '(found: ' + (isPlainObject(element) ? `object with keys {${Object.keys(element)}}` : element) + ')';
+
+  console.error(`Invalid element type, expected types: Element instance, string, boolean, array, null, undefined. ${typeInfo}`);
+}
+
+function isPlainObject(obj) {
+  return EMPTY_OBJECT.toString.call(obj) === '[object Object]';
+}
+
+export function renderToString(element, options) {
+  return renderElementToString(element, EMPTY_OBJECT, Object.assign({}, DEFAULT_STYLE_OPTIONS, options));
+}
+
+export default {
+  renderToString
 };

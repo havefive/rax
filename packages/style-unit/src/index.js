@@ -1,82 +1,116 @@
-/**
- * CSS properties which accept numbers but are not in units of "px".
- */
-const UNITLESS_NUMBER_PROPS = {
-  animationIterationCount: true,
-  borderImageOutset: true,
-  borderImageSlice: true,
-  borderImageWidth: true,
-  boxFlex: true,
-  boxFlexGroup: true,
-  boxOrdinalGroup: true,
-  columnCount: true,
-  flex: true,
-  flexGrow: true,
-  flexPositive: true,
-  flexShrink: true,
-  flexNegative: true,
-  flexOrder: true,
-  gridRow: true,
-  gridColumn: true,
-  fontWeight: true,
-  lineClamp: true,
-  // We make lineHeight default is px that is diff with w3c spec
-  // lineHeight: true,
-  opacity: true,
-  order: true,
-  orphans: true,
-  tabSize: true,
-  widows: true,
-  zIndex: true,
-  zoom: true,
-  // Weex only
-  lines: true,
+import { isWeb, isWeex } from 'universal-env';
+
+const RPX_REG = /[-+]?\d*\.?\d+rpx/g;
+const GLOBAL_RPX_COEFFICIENT = '__rpx_coefficient__';
+const GLOBAL_VIEWPORT_WIDTH = '__viewport_width__';
+const global =
+  typeof window === 'object'
+    ? window
+    : typeof global === 'object'
+      ? global
+      : {};
+// convertUnit method targetPlatform
+let targetPlatform = isWeb ? 'web' : isWeex ? 'weex' : '';
+
+// Init toFixed method
+const unitPrecision = 4;
+const toFixed = (number, precision) => {
+  const multiplier = Math.pow(10, precision + 1);
+  const wholeNumber = Math.floor(number * multiplier);
+  return Math.round(wholeNumber / 10) * 10 / multiplier;
 };
-const SUFFIX = 'rem';
-const REM_REG = /[-+]?\d*\.?\d+rem/g;
 
-// Default 1 rem to 1 px
-let defaultRemUnit = 1;
+// Dedault decimal px transformer.
+let decimalPixelTransformer = (rpx) => parseFloat(rpx) * getRpx() + 'px';
+
+// Default decimal vw transformer.
+const decimalVWTransformer = (rpx) => toFixed(parseFloat(rpx) / (getViewportWidth() / 100), unitPrecision) + 'vw';
+
+// Default 1 rpx to 1 px
+if (getRpx() === undefined) {
+  setRpx(1);
+}
+
+// Viewport width, default to 750.
+if (getViewportWidth() === undefined) {
+  setViewportWidth(750);
+}
 
 /**
- * Is string contains rem
+ * Is string contains rpx
+ * note: rpx is an alias to rpx
  * @param {String} str
  * @returns {Boolean}
  */
-export function isRem(str) {
-  return typeof str === 'string' && str.indexOf(SUFFIX) !== -1;
+export function isRpx(str) {
+  return typeof str === 'string' && RPX_REG.test(str);
 }
 
 /**
- * Calculate rem to pixels: '1.2rem' => 1.2 * rem
+ * Calculate rpx
  * @param {String} str
- * @param {Number} rem
- * @returns {number}
+ * @returns {String}
  */
-export function calcRem(str, remUnit = defaultRemUnit) {
-  return str.replace(REM_REG, function(rem) {
-    return parseFloat(rem) * remUnit + 'px';
-  });
-}
-
-export function getRem() {
-  return defaultRemUnit;
-}
-
-export function setRem(rem) {
-  defaultRemUnit = rem;
-}
-
-export function isUnitNumber(val, prop) {
-  return typeof val === 'number' && !UNITLESS_NUMBER_PROPS[prop];
-}
-
-export function convertUnit(val, prop, remUnit = defaultRemUnit) {
-  if (prop && isUnitNumber(val, prop)) {
-    return val * remUnit + 'px';
-  } else if (isRem(val)) {
-    return calcRem(val, remUnit);
+export function calcRpx(str) {
+  if (targetPlatform === 'web') {
+    // In Web convert rpx to 'vw', same as driver-dom and driver-universal
+    // '375rpx' => '50vw'
+    return str.replace(RPX_REG, decimalVWTransformer);
+  } else if (targetPlatform === 'weex') {
+    // In Weex convert rpx to 'px'
+    // '375rpx' => 375 * px
+    return str.replace(RPX_REG, decimalPixelTransformer);
+  } else {
+    // Other platform return original value, like Mini-App and WX Mini-Program ...
+    // '375rpx' => '375rpx'
+    return str;
   }
+}
 
-  return val;
+export function getRpx() {
+  return global[GLOBAL_RPX_COEFFICIENT];
+}
+
+export function setRpx(rpx) {
+  global[GLOBAL_RPX_COEFFICIENT] = rpx;
+}
+
+export function getViewportWidth() {
+  return global[GLOBAL_VIEWPORT_WIDTH];
+}
+
+export function setViewportWidth(viewport) {
+  global[GLOBAL_VIEWPORT_WIDTH] = viewport;
+}
+
+/**
+ * Set a function to transform unit of pixel,
+ * default to passthrough.
+ * @param {Function} transformer function
+ */
+export function setDecimalPixelTransformer(transformer) {
+  decimalPixelTransformer = transformer;
+}
+
+const cache = Object.create(null);
+/**
+ * Convert rpx.
+ * @param value
+ * @param prop
+ * @param platform
+ * @return {String} Transformed value.
+ */
+export function convertUnit(value, prop, platform) {
+  let cacheKey = `${prop}-${value}`;
+  const hit = cache[cacheKey];
+  if (platform) {
+    cacheKey += `-${platform}`;
+    targetPlatform = platform;
+  }
+  if (hit) {
+    return hit;
+  } else {
+    value = value + '';
+    return cache[cacheKey] = isRpx(value) ? calcRpx(value) : value;
+  }
 }
